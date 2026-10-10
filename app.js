@@ -22,6 +22,7 @@ const state = {
   data: null,
   tab: TABS.includes(location.hash.slice(1)) ? location.hash.slice(1) : (store.get('wp_tab') || 'ringkasan'),
   filter: 'semua',
+  pocketFilter: 'semua',
   openCats: store.get('wp_open_cats') || {},
   busy: 0,
   loud: 0,
@@ -47,6 +48,13 @@ const rpShort = (n) => {
   return rp(n);
 };
 const moneyInput = (n) => (num(n) ? num(n).toLocaleString('id-ID') : '');
+// Angka desimal untuk gram (menerima "2,5" atau "2.5").
+const dec = (v) => {
+  if (typeof v === 'number') return isFinite(v) ? v : 0;
+  const n = parseFloat(String(v || '').replace(/\s/g, '').replace(',', '.'));
+  return isFinite(n) ? n : 0;
+};
+const fmtGram = (g) => g.toLocaleString('id-ID', { maximumFractionDigits: 3 }) + ' gr';
 const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const pad = (n) => String(n).padStart(2, '0');
 const toISO = (d) => d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate());
@@ -73,6 +81,15 @@ function personName(k) {
   return 'Keluarga';
 }
 
+function pocketById(id) {
+  return state.data.Pocket.find((p) => p.id === String(id));
+}
+function pocketName(id) {
+  const p = pocketById(id);
+  return p ? p.nama : 'Tanpa pocket';
+}
+const isGram = (id) => { const p = pocketById(id); return !!p && p.satuan === 'gram'; };
+
 /* ---------- Mode coba (localStorage) ---------- */
 const SEED_ITEMS = {
   'Lamaran': ['Dekorasi', 'Catering', 'Snack', 'Fotografi', 'MUA', 'Busana lamaran', 'Cincin', 'Seserahan'],
@@ -84,6 +101,11 @@ const SEED_ITEMS = {
   'Transport & Akomodasi': ['Transport persiapan', 'Penginapan keluarga', 'Mobil pengantin', 'Mobil keluarga'],
 };
 
+function defaultPockets() {
+  return [['Valas MyBCA', ''], ['Reksadana', ''], ['Logam Mulia', 'gram'], ['Perhiasan', 'gram']]
+    .map(([nama, satuan]) => ({ id: uid(), nama, satuan, nilai_sekarang: '', tgl_nilai: '', catatan: '' }));
+}
+
 function seedDemo(withSamples) {
   const now = new Date();
   const wedding = new Date(now.getFullYear(), now.getMonth() + 8, 14);
@@ -91,6 +113,7 @@ function seedDemo(withSamples) {
     Pengaturan: withSamples
       ? { nama1: 'Saya', nama2: 'Pasangan', tanggal_nikah: toISO(wedding), target_tabungan: 150000000 }
       : { nama1: 'Saya', nama2: 'Pasangan', tanggal_nikah: '', target_tabungan: 0 },
+    Pocket: defaultPockets(),
     Tabungan: [],
     Anggaran: [],
     Pembayaran: [],
@@ -116,18 +139,24 @@ function seedDemo(withSamples) {
   setItem('Administrasi', 'Pre-marital check up', { estimasi: 1101500, harga_deal: 1101500, vendor: 'RSA UGM' });
   setItem('Busana & MUA', 'MUA pengantin', { estimasi: 7000000 });
 
-  const pay = (kat, item, jumlah, m, catatan) => d.Pembayaran.push({ id: uid(), item_id: find(kat, item).id, tanggal: monthAgo(m, 10), jumlah, catatan });
+  const [valas, reksa, emas] = d.Pocket;
+  const pay = (kat, item, jumlah, m, catatan) => d.Pembayaran.push({ id: uid(), item_id: find(kat, item).id, tanggal: monthAgo(m, 10), jumlah, catatan, kantong: valas.id });
   pay('Resepsi', 'Venue', 10000000, 2, 'DP');
   pay('Resepsi', 'Foto & video', 5000000, 1, 'DP');
   pay('Lamaran', 'Cincin', 7600000, 3, 'Lunas');
   pay('Administrasi', 'Pre-marital check up', 1101500, 1, '');
 
+  const tx = (fields) => d.Tabungan.push(Object.assign({ id: uid(), oleh: '', ke: '', gram: '', catatan: '' }, fields));
   for (let m = 5; m >= 0; m--) {
-    d.Tabungan.push({ id: uid(), tanggal: monthAgo(m, 25), oleh: 'p1', jenis: 'setor', jumlah: 4000000 + (m % 2) * 1000000, catatan: 'Gaji' });
-    d.Tabungan.push({ id: uid(), tanggal: monthAgo(m, 26), oleh: 'p2', jenis: 'setor', jumlah: 3500000, catatan: 'Gaji' });
+    tx({ tanggal: monthAgo(m, 25), oleh: 'p1', jenis: 'setor', jumlah: 4000000 + (m % 2) * 1000000, catatan: 'Gaji', kantong: valas.id });
+    tx({ tanggal: monthAgo(m, 26), oleh: 'p2', jenis: 'setor', jumlah: 3500000, catatan: 'Gaji', kantong: valas.id });
   }
-  d.Tabungan.push({ id: uid(), tanggal: monthAgo(2, 5), oleh: 'keluarga', jenis: 'setor', jumlah: 10000000, catatan: 'Bantuan orang tua' });
-  d.Tabungan.push({ id: uid(), tanggal: monthAgo(1, 15), oleh: 'p1', jenis: 'tarik', jumlah: 1500000, catatan: 'Keperluan mendadak' });
+  tx({ tanggal: monthAgo(2, 5), oleh: 'keluarga', jenis: 'setor', jumlah: 10000000, catatan: 'Bantuan orang tua', kantong: valas.id });
+  tx({ tanggal: monthAgo(1, 15), oleh: 'p1', jenis: 'tarik', jumlah: 1500000, catatan: 'Keperluan mendadak', kantong: valas.id });
+  tx({ tanggal: monthAgo(3, 2), jenis: 'pindah', jumlah: 8000000, catatan: 'Beli reksadana', kantong: valas.id, ke: reksa.id });
+  tx({ tanggal: monthAgo(2, 20), jenis: 'pindah', jumlah: 6400000, gram: 4, catatan: 'Beli Antam 4 gr', kantong: valas.id, ke: emas.id });
+  Object.assign(reksa, { nilai_sekarang: 8350000, tgl_nilai: monthAgo(0, 1) });
+  Object.assign(emas, { nilai_sekarang: 6900000, tgl_nilai: monthAgo(0, 1) });
   return d;
 }
 
@@ -135,6 +164,13 @@ const demo = {
   load() {
     let d = store.get('wp_demo');
     if (!d) { d = seedDemo(false); store.set('wp_demo', d); }
+    if (!d.Pocket) {
+      // Data mode coba versi lama: catatan lama masuk ke pocket pertama.
+      d.Pocket = defaultPockets();
+      d.Tabungan.forEach((t) => { if (!t.kantong) t.kantong = d.Pocket[0].id; });
+      d.Pembayaran.forEach((p) => { if (!p.kantong) p.kantong = d.Pocket[0].id; });
+      store.set('wp_demo', d);
+    }
     return d;
   },
   handle(p) {
@@ -146,6 +182,9 @@ const demo = {
       const i = list.findIndex((r) => r.id === row.id);
       if (i >= 0) list[i] = row; else list.push(row);
     } else if (p.action === 'delete') {
+      if (p.sheet === 'Pocket' && d.Tabungan.concat(d.Pembayaran).some((r) => r.kantong === p.id || r.ke === p.id)) {
+        return Promise.reject(new Error('Pocket ini masih punya catatan transaksi. Hapus atau pindahkan catatannya dulu.'));
+      }
       d[p.sheet] = d[p.sheet].filter((r) => r.id !== p.id);
       if (p.sheet === 'Anggaran') d.Pembayaran = d.Pembayaran.filter((r) => r.item_id !== p.id);
     } else if (p.action === 'saveSettings') {
@@ -177,12 +216,17 @@ async function api(payload) {
   return json.data;
 }
 
+const str = (v) => (v == null ? '' : String(v));
+
 function normalize(d) {
   return {
+    // Script Google versi lama belum mengirim Pocket.
+    serverOld: !DEMO && !Array.isArray(d.Pocket),
     Pengaturan: Object.assign({ nama1: 'Saya', nama2: 'Pasangan', tanggal_nikah: '', target_tabungan: 0 }, d.Pengaturan || {}),
-    Tabungan: (d.Tabungan || []).map((r) => Object.assign({}, r, { id: String(r.id) })),
-    Anggaran: (d.Anggaran || []).map((r) => Object.assign({}, r, { id: String(r.id) })),
-    Pembayaran: (d.Pembayaran || []).map((r) => Object.assign({}, r, { id: String(r.id), item_id: String(r.item_id) })),
+    Pocket: (d.Pocket || []).map((r) => Object.assign({}, r, { id: str(r.id), satuan: str(r.satuan), tgl_nilai: str(r.tgl_nilai) })),
+    Tabungan: (d.Tabungan || []).map((r) => Object.assign({}, r, { id: str(r.id), kantong: str(r.kantong), ke: str(r.ke), jenis: str(r.jenis) || 'setor', tanggal: str(r.tanggal) })),
+    Anggaran: (d.Anggaran || []).map((r) => Object.assign({}, r, { id: str(r.id) })),
+    Pembayaran: (d.Pembayaran || []).map((r) => Object.assign({}, r, { id: str(r.id), item_id: str(r.item_id), kantong: str(r.kantong), tanggal: str(r.tanggal) })),
   };
 }
 
@@ -215,12 +259,36 @@ function calc() {
   const d = state.data;
   const s = d.Pengaturan;
 
+  // Saldo per pocket = modal (uang masuk − keluar). Nilai perkiraan = nilai terakhir yang diisi
+  // + transaksi setelah tanggal nilai itu.
+  const pockets = d.Pocket.map((p) => Object.assign({}, p, { modal: 0, gram: 0, flowAfter: 0, txCount: 0 }));
+  const pmap = {};
+  pockets.forEach((p) => { pmap[p.id] = p; });
+  const orphan = { id: '', nama: 'Tanpa pocket', satuan: '', nilai_sekarang: '', tgl_nilai: '', modal: 0, gram: 0, flowAfter: 0, txCount: 0 };
+  const flow = (pid, amount, gram, tanggal) => {
+    const p = pmap[pid] || orphan;
+    p.modal += amount;
+    p.txCount++;
+    if (p.satuan === 'gram') p.gram += gram;
+    if (p.tgl_nilai && String(tanggal) > p.tgl_nilai) p.flowAfter += amount;
+  };
+
   const per = { p1: 0, p2: 0, keluarga: 0 };
   let masuk = 0, tarik = 0;
   d.Tabungan.forEach((t) => {
     const j = num(t.jumlah);
+    const g = dec(t.gram);
     const who = PEOPLE.includes(t.oleh) ? t.oleh : 'keluarga';
-    if (t.jenis === 'tarik') { tarik += j; per[who] -= j; } else { masuk += j; per[who] += j; }
+    if (t.jenis === 'pindah') {
+      flow(t.kantong, -j, -g, t.tanggal);
+      flow(t.ke, j, g, t.tanggal);
+    } else if (t.jenis === 'tarik') {
+      tarik += j; per[who] -= j;
+      flow(t.kantong, -j, -g, t.tanggal);
+    } else {
+      masuk += j; per[who] += j;
+      flow(t.kantong, j, g, t.tanggal);
+    }
   });
   const terkumpul = masuk - tarik;
 
@@ -230,7 +298,17 @@ function calc() {
     const j = num(p.jumlah);
     paid[p.item_id] = (paid[p.item_id] || 0) + j;
     totalBayar += j;
+    flow(p.kantong, -j, 0, p.tanggal);
   });
+
+  if (orphan.txCount) pockets.push(orphan);
+  pockets.forEach((p) => {
+    p.hasNilai = !!p.tgl_nilai && p.nilai_sekarang !== '' && p.nilai_sekarang != null;
+    p.nilai = p.hasNilai ? num(p.nilai_sekarang) + p.flowAfter : p.modal;
+    p.selisih = p.nilai - p.modal;
+  });
+  const totalNilai = pockets.reduce((a, p) => a + p.nilai, 0);
+  const adaNilai = pockets.some((p) => p.hasNilai);
 
   const today = new Date(); today.setHours(0, 0, 0, 0);
   const items = d.Anggaran.map((a) => {
@@ -277,7 +355,7 @@ function calc() {
     .filter((i) => i.jatuh_tempo && i.sisa > 0)
     .sort((a, b) => String(a.jatuh_tempo).localeCompare(String(b.jatuh_tempo)));
 
-  return { per, masuk, tarik, terkumpul, totalBayar, items, cats, totalBiaya, totalEst, totalSisa, saldo, target, targetManual, hari, bulan, kurangTarget, perBulan, kekurangan, jatuhTempo };
+  return { pockets, totalNilai, adaNilai, per, masuk, tarik, terkumpul, totalBayar, items, cats, totalBiaya, totalEst, totalSisa, saldo, target, targetManual, hari, bulan, kurangTarget, perBulan, kekurangan, jatuhTempo };
 }
 
 /* ---------- Render ---------- */
@@ -317,6 +395,38 @@ function contribution(c) {
       <span class="pct num">${pct(x.v, total)}%</span>
     </div>`).join('');
   return `<div class="stack" role="img" aria-label="Kontribusi tabungan">${bar}</div><div class="legend">${legend}</div>`;
+}
+
+function selisihBadge(p) {
+  if (!p.hasNilai || p.selisih === 0) return '';
+  const up = p.selisih > 0;
+  return `<span class="badge ${up ? 'lunas' : 'telat'}">${up ? '▲ untung' : '▼ rugi'} ${rpShort(Math.abs(p.selisih))}</span>`;
+}
+
+function pocketRows(c) {
+  if (!c.pockets.length) return '<p class="empty">Belum ada pocket.</p>';
+  return c.pockets.map((p) => {
+    const sub = [];
+    if (p.satuan === 'gram' && p.gram) sub.push(fmtGram(p.gram));
+    sub.push(p.hasNilai ? 'Nilai per ' + fmtDate(p.tgl_nilai) + ' ≈ ' + rp(p.nilai) : 'Modal');
+    return `
+      <div class="row ${p.id ? 'clickable' : ''}" ${p.id ? `data-action="edit-pocket" data-id="${esc(p.id)}"` : ''}>
+        <div class="row-main">
+          <div class="row-title">${esc(p.nama)}</div>
+          <div class="row-sub">${esc(sub.join(' · '))}</div>
+        </div>
+        <div class="row-end">
+          <div class="row-amount num">${rp(p.modal)}</div>
+          ${selisihBadge(p)}
+        </div>
+      </div>`;
+  }).join('');
+}
+
+function serverOldNotice() {
+  if (!state.data.serverOld) return '';
+  return `<section class="card"><div class="status warning"><span class="dot"></span>Script Google belum diperbarui</div>
+    <p class="hint" style="margin-top:6px">Fitur pocket belum aktif. Perbarui kode di Apps Script lalu buat versi deployment baru (lihat PANDUAN.md).</p></section>`;
 }
 
 function dueRow(it) {
@@ -369,11 +479,17 @@ function viewRingkasan(c) {
       </div>
     </div>`).join('');
 
+  const nilaiLine = c.adaNilai
+    ? `<div class="hero-sub" style="margin-top:2px">Perkiraan nilai sekarang <strong class="num">${rp(c.totalNilai)}</strong> (${c.totalNilai >= c.saldo ? '▲ untung' : '▼ rugi'} ${rp(Math.abs(c.totalNilai - c.saldo))} dari investasi)</div>`
+    : '';
+
   return `
+    ${serverOldNotice()}
     <section class="card">
       <div class="hero-label">Saldo tabungan saat ini</div>
       <div class="hero-value num">${rp(c.saldo)}</div>
       <div class="hero-sub">Terkumpul ${rp(c.terkumpul)} − sudah dibayar ke vendor ${rp(c.totalBayar)}</div>
+      ${nilaiLine}
       <div style="margin-top:18px">
         ${meter(c.terkumpul, c.target, { label: 'Progres target ' + pct(c.terkumpul, c.target) + '%' })}
         <div class="meter-row">
@@ -403,19 +519,24 @@ function viewRingkasan(c) {
 
     <div class="grid-2">
       <section class="card">
+        <div class="card-head"><h2>Saldo per pocket</h2><a href="#" class="link small" data-action="goto" data-tab="tabungan">Kelola</a></div>
+        <div class="list">${pocketRows(c)}</div>
+      </section>
+      <section class="card">
         <div class="card-head"><h2>Pembayaran terdekat</h2><span class="muted">${c.jatuhTempo.length} tagihan</span></div>
         <div class="list">${due.length ? due.map(dueRow).join('') : '<p class="empty">Tidak ada tagihan dengan jatuh tempo.<br>Isi tanggal jatuh tempo di item anggaran.</p>'}</div>
       </section>
-      <section class="card">
-        <div class="card-head"><h2>Anggaran per kategori</h2><a href="#" class="link small" data-action="goto" data-tab="anggaran">Detail</a></div>
-        <div class="list">${catRows || '<p class="empty">Belum ada harga yang diisi.</p>'}</div>
-      </section>
     </div>
+
+    <section class="card">
+      <div class="card-head"><h2>Anggaran per kategori</h2><a href="#" class="link small" data-action="goto" data-tab="anggaran">Detail</a></div>
+      <div class="list">${catRows || '<p class="empty">Belum ada harga yang diisi.</p>'}</div>
+    </section>
   `;
 }
 
 function monthlyChart() {
-  const rows = state.data.Tabungan.filter((t) => t.jenis !== 'tarik' && parseDate(t.tanggal));
+  const rows = state.data.Tabungan.filter((t) => t.jenis === 'setor' && parseDate(t.tanggal));
   if (!rows.length) return '';
   const byMonth = {};
   rows.forEach((t) => {
@@ -462,36 +583,65 @@ function monthlyChart() {
     </section>`;
 }
 
+function txRow(t) {
+  const g = dec(t.gram);
+  const gramText = g ? ' · ' + fmtGram(g) : '';
+  const note = t.catatan ? ' · ' + esc(t.catatan) : '';
+  let title, sub, amount, badge = '';
+  if (t.jenis === 'pindah') {
+    title = `${esc(pocketName(t.kantong))} → ${esc(pocketName(t.ke))}`;
+    sub = fmtDate(t.tanggal) + gramText + note;
+    amount = rp(num(t.jumlah));
+    badge = '<span class="badge">⇄ Pindah</span>';
+  } else {
+    const who = PEOPLE.includes(t.oleh) ? t.oleh : 'keluarga';
+    const tarik = t.jenis === 'tarik';
+    title = `<span class="who"><span class="sw" style="background:var(--${who})"></span>${esc(personName(who))}</span>`;
+    sub = fmtDate(t.tanggal) + ` · ${tarik ? 'dari' : 'ke'} ${esc(pocketName(t.kantong))}` + gramText + note;
+    amount = (tarik ? '− ' : '+ ') + rp(num(t.jumlah));
+    if (tarik) badge = '<span class="badge">Penarikan</span>';
+  }
+  return `
+    <div class="row clickable" data-action="edit-saving" data-id="${esc(t.id)}">
+      <div class="row-main">
+        <div class="row-title">${title}</div>
+        <div class="row-sub">${sub}</div>
+      </div>
+      <div class="row-end">
+        <div class="row-amount num">${amount}</div>
+        ${badge}
+      </div>
+    </div>`;
+}
+
+const byDateDesc = (a, b) => String(b.tanggal).localeCompare(String(a.tanggal));
+
 function viewTabungan(c) {
+  const pf = state.pocketFilter;
   const list = state.data.Tabungan
-    .filter((t) => state.filter === 'semua' || t.oleh === state.filter)
+    .filter((t) => state.filter === 'semua' || (t.jenis !== 'pindah' && t.oleh === state.filter))
+    .filter((t) => pf === 'semua' || t.kantong === pf || t.ke === pf)
     .slice()
-    .sort((a, b) => String(b.tanggal).localeCompare(String(a.tanggal)));
+    .sort(byDateDesc);
   let lastMonth = '';
   const rows = list.map((t) => {
     const d = parseDate(t.tanggal);
     const mk = d ? d.getFullYear() + '-' + pad(d.getMonth() + 1) : '';
     const head = mk && mk !== lastMonth ? `<div class="month-head">${esc(monthLabel(mk, true))}</div>` : '';
     lastMonth = mk;
-    const who = PEOPLE.includes(t.oleh) ? t.oleh : 'keluarga';
-    const tarik = t.jenis === 'tarik';
-    return `${head}
-      <div class="row clickable" data-action="edit-saving" data-id="${esc(t.id)}">
-        <div class="row-main">
-          <div class="row-title"><span class="who"><span class="sw" style="background:var(--${who})"></span>${esc(personName(who))}</span></div>
-          <div class="row-sub">${fmtDate(t.tanggal)}${t.catatan ? ' · ' + esc(t.catatan) : ''}</div>
-        </div>
-        <div class="row-end">
-          <div class="row-amount num">${tarik ? '−' : '+'} ${rp(num(t.jumlah))}</div>
-          ${tarik ? '<span class="badge">Penarikan</span>' : ''}
-        </div>
-      </div>`;
+    return head + txRow(t);
   }).join('');
 
   const chips = ['semua'].concat(PEOPLE).map((k) =>
     `<button type="button" class="chip ${state.filter === k ? 'active' : ''}" data-action="filter" data-filter="${k}">${k === 'semua' ? 'Semua' : esc(personName(k))}</button>`).join('');
+  const pocketSelect = state.data.Pocket.length ? `
+    <select class="pocket-filter" data-change="pocket-filter" aria-label="Filter pocket">
+      <option value="semua">Semua pocket</option>
+      ${state.data.Pocket.map((p) => `<option value="${esc(p.id)}" ${pf === p.id ? 'selected' : ''}>${esc(p.nama)}</option>`).join('')}
+    </select>` : '';
 
   return `
+    ${serverOldNotice()}
     <section class="card">
       <div class="hero-label">Total tabungan terkumpul</div>
       <div class="hero-value num">${rp(c.terkumpul)}</div>
@@ -499,14 +649,21 @@ function viewTabungan(c) {
       <div style="margin-top:18px">${contribution(c)}</div>
     </section>
 
+    <section class="card">
+      <div class="card-head"><h2>Pocket</h2>${state.data.serverOld ? '' : '<button type="button" class="btn ghost small" data-action="new-pocket">+ Pocket baru</button>'}</div>
+      <div class="list">${pocketRows(c)}</div>
+      ${c.adaNilai ? `<p class="hint" style="margin-top:8px">Total perkiraan nilai sekarang: <strong class="num">${rp(c.totalNilai)}</strong>. Klik pocket untuk memperbarui nilainya.</p>` : '<p class="hint" style="margin-top:8px">Klik pocket untuk mengisi nilai sekarang (misal nilai reksadana atau harga emas terbaru).</p>'}
+    </section>
+
     ${monthlyChart()}
 
     <section class="card">
       <div class="toolbar" style="margin-bottom:10px">
         <div class="chips">${chips}</div>
-        <button type="button" class="btn primary" data-action="new-saving">+ Catat tabungan</button>
+        <button type="button" class="btn primary" data-action="new-saving">+ Catat transaksi</button>
       </div>
-      <div class="list">${rows || '<p class="empty">Belum ada catatan. Klik “+ Catat tabungan” untuk mulai.</p>'}</div>
+      ${pocketSelect}
+      <div class="list">${rows || '<p class="empty">Belum ada catatan. Klik “+ Catat transaksi” untuk mulai.</p>'}</div>
     </section>
   `;
 }
@@ -626,25 +783,106 @@ function whoOptions(selected) {
   return PEOPLE.map((k) => `<label><input type="radio" name="oleh" value="${k}" ${selected === k ? 'checked' : ''}><span>${esc(personName(k))}</span></label>`).join('');
 }
 
+function pocketOptions(selected) {
+  const list = state.data.Pocket;
+  if (!list.length) return '<option value="">(belum ada pocket)</option>';
+  return list.map((p) => `<option value="${esc(p.id)}" ${p.id === selected ? 'selected' : ''}>${esc(p.nama)}${p.satuan === 'gram' ? ' (gram)' : ''}</option>`).join('');
+}
+
+const firstPocketId = () => (state.data.Pocket[0] ? state.data.Pocket[0].id : '');
+const rememberedPocket = (key) => {
+  const id = store.get(key);
+  return pocketById(id) ? id : firstPocketId();
+};
+
 function savingForm(t) {
   const isNew = !t;
-  t = t || { tanggal: todayStr(), oleh: store.get('wp_last_who') || 'p1', jenis: 'setor', jumlah: '', catatan: '' };
-  openModal(isNew ? 'Catat tabungan' : 'Ubah catatan', `
+  t = t || { tanggal: todayStr(), oleh: store.get('wp_last_who') || 'p1', jenis: 'setor', jumlah: '', catatan: '', kantong: rememberedPocket('wp_last_pocket'), ke: '', gram: '' };
+  const second = state.data.Pocket.find((p) => p.id !== t.kantong);
+  const ke = t.ke || (second ? second.id : '');
+  const jenisRadio = (v, label) => `<label><input type="radio" name="jenis" value="${v}" ${t.jenis === v ? 'checked' : ''}><span>${label}</span></label>`;
+  openModal(isNew ? 'Catat transaksi' : 'Ubah catatan', `
     <form class="form" data-form="saving" data-id="${esc(t.id || '')}">
       <div class="field"><span>Jenis</span>
-        <div class="seg">
-          <label><input type="radio" name="jenis" value="setor" ${t.jenis !== 'tarik' ? 'checked' : ''}><span>Setor</span></label>
-          <label><input type="radio" name="jenis" value="tarik" ${t.jenis === 'tarik' ? 'checked' : ''}><span>Tarik</span></label>
-        </div>
+        <div class="seg">${jenisRadio('setor', 'Setor')}${jenisRadio('pindah', 'Pindah')}${jenisRadio('tarik', 'Tarik')}</div>
       </div>
-      <div class="field"><span>Dari</span><div class="seg">${whoOptions(t.oleh)}</div></div>
+      <p class="hint" data-show="setor">Uang masuk dari pendapatan ke salah satu pocket.</p>
+      <p class="hint" data-show="pindah">Memindahkan uang antar pocket, misal dari Valas untuk beli emas. Total tabungan tidak berubah.</p>
+      <p class="hint" data-show="tarik">Uang diambil dari pocket untuk keperluan lain (bukan bayar vendor).</p>
+      <div class="field" data-show="setor tarik"><span data-label-who>Dari</span><div class="seg">${whoOptions(t.oleh)}</div></div>
+      <div class="field-row">
+        <label class="field"><span data-label-kantong>Masuk ke pocket</span><select name="kantong">${pocketOptions(t.kantong)}</select></label>
+        <label class="field" data-show="pindah"><span>Ke pocket</span><select name="ke">${pocketOptions(ke)}</select></label>
+      </div>
       <div class="field-row">
         <label class="field"><span>Jumlah (Rp)</span><input type="text" inputmode="numeric" data-money name="jumlah" value="${moneyInput(t.jumlah)}" placeholder="0" required autofocus></label>
         <label class="field"><span>Tanggal</span><input type="date" name="tanggal" value="${esc(t.tanggal)}" required></label>
       </div>
-      <label class="field"><span>Catatan</span><input type="text" name="catatan" value="${esc(t.catatan)}" placeholder="mis. gaji Oktober, bonus, angpao" maxlength="80"></label>
+      <label class="field" data-gram-field><span>Jumlah emas (gram, opsional)</span><input type="text" inputmode="decimal" name="gram" value="${dec(t.gram) ? esc(String(dec(t.gram)).replace('.', ',')) : ''}" placeholder="mis. 2,5"></label>
+      <label class="field"><span>Catatan</span><input type="text" name="catatan" value="${esc(t.catatan)}" placeholder="mis. gaji Oktober, beli Antam 5 gr" maxlength="80"></label>
       <div class="actions">
         ${isNew ? '<span></span>' : `<button type="button" class="btn danger" data-action="delete-saving" data-id="${esc(t.id)}">Hapus</button>`}
+        <button type="submit" class="btn primary">Simpan</button>
+      </div>
+    </form>`);
+  updateSavingForm($('form[data-form="saving"]'));
+}
+
+// Menampilkan kolom yang sesuai dengan jenis transaksi dan pocket yang dipilih.
+function updateSavingForm(form) {
+  if (!form) return;
+  const jenis = form.jenis.value;
+  form.querySelectorAll('[data-show]').forEach((el) => { el.hidden = !el.dataset.show.split(' ').includes(jenis); });
+  form.querySelector('[data-label-who]').textContent = jenis === 'tarik' ? 'Diambil oleh' : 'Dari';
+  form.querySelector('[data-label-kantong]').textContent = { setor: 'Masuk ke pocket', pindah: 'Dari pocket', tarik: 'Diambil dari pocket' }[jenis];
+  const gramRelevant = isGram(form.kantong.value) || (jenis === 'pindah' && isGram(form.ke.value));
+  form.querySelector('[data-gram-field]').hidden = !gramRelevant;
+}
+
+function pocketForm(p) {
+  const isNew = !p;
+  const c = calc();
+  const full = p ? c.pockets.find((x) => x.id === p.id) : null;
+  p = p || { nama: '', satuan: '', nilai_sekarang: '', tgl_nilai: '', catatan: '' };
+
+  let detail = '';
+  if (!isNew) {
+    const tx = state.data.Tabungan.filter((t) => t.kantong === p.id || t.ke === p.id).slice().sort(byDateDesc);
+    const pays = state.data.Pembayaran.filter((x) => x.kantong === p.id);
+    const payRows = pays.slice().sort(byDateDesc).slice(0, 5).map((x) => {
+      const it = state.data.Anggaran.find((a) => a.id === x.item_id);
+      return `<div class="row"><div class="row-main"><div class="row-title">Bayar ${esc(it ? it.item : 'vendor')}</div><div class="row-sub">${fmtDate(x.tanggal)}${x.catatan ? ' · ' + esc(x.catatan) : ''}</div></div><div class="row-end"><div class="row-amount num">− ${rp(num(x.jumlah))}</div></div></div>`;
+    }).join('');
+    detail = `
+      <div class="pay-summary">
+        <div>Modal<strong class="num">${rp(full.modal)}</strong></div>
+        <div>Nilai sekarang<strong class="num">${full.hasNilai ? rp(full.nilai) : '–'}</strong></div>
+        <div>${full.selisih < 0 ? 'Rugi' : 'Untung'}<strong class="num">${full.hasNilai ? rp(Math.abs(full.selisih)) : '–'}</strong></div>
+      </div>
+      ${p.satuan === 'gram' ? `<p class="hint">Total emas: <strong>${fmtGram(full.gram)}</strong></p>` : ''}`;
+    const txHtml = tx.slice(0, 8).map(txRow).join('');
+    detail += `
+      <div class="subsection">
+        <h3>Transaksi terakhir</h3>
+        <div class="list">${txHtml || '<p class="hint">Belum ada transaksi tabungan.</p>'}</div>
+        ${payRows ? `<h3 style="margin-top:6px">Pembayaran vendor dari pocket ini</h3><div class="list">${payRows}</div>` : ''}
+      </div>`;
+  }
+
+  openModal(isNew ? 'Pocket baru' : p.nama, `
+    ${detail}
+    <form class="form ${isNew ? '' : 'subsection'}" data-form="pocket" data-id="${esc(p.id || '')}">
+      ${isNew ? '' : '<h3>Pengaturan pocket</h3>'}
+      <label class="field"><span>Nama pocket</span><input type="text" name="nama" value="${esc(p.nama)}" required maxlength="40" placeholder="mis. Tabungan BCA, Emas Antam"></label>
+      <label class="check"><input type="checkbox" name="satuan" value="gram" ${p.satuan === 'gram' ? 'checked' : ''}> Catat jumlah gram (untuk emas / perhiasan)</label>
+      <div class="field-row">
+        <label class="field"><span>Nilai sekarang (Rp)</span><input type="text" inputmode="numeric" data-money name="nilai_sekarang" value="${moneyInput(p.nilai_sekarang)}" placeholder="Kosongkan = sama dengan modal"></label>
+        <label class="field"><span>Per tanggal</span><input type="date" name="tgl_nilai" value="${esc(p.tgl_nilai || todayStr())}"></label>
+      </div>
+      <p class="hint">Isi dengan nilai terbaru, misal dari aplikasi reksadana atau harga emas hari ini × jumlah gram. Setoran sesudah tanggal ini otomatis ditambahkan ke perkiraan nilainya.</p>
+      <label class="field"><span>Catatan</span><input type="text" name="catatan" value="${esc(p.catatan)}" maxlength="80" placeholder="mis. nomor rekening, nama produk reksadana"></label>
+      <div class="actions">
+        ${isNew ? '<span></span>' : `<button type="button" class="btn danger" data-action="delete-pocket" data-id="${esc(p.id)}">Hapus pocket</button>`}
         <button type="submit" class="btn primary">Simpan</button>
       </div>
     </form>`);
@@ -665,7 +903,7 @@ function itemForm(it, presetCat) {
       <div class="row">
         <div class="row-main">
           <div class="row-title num">${rp(num(p.jumlah))}</div>
-          <div class="row-sub">${fmtDate(p.tanggal)} · ${esc(p.catatan || 'Pembayaran ' + (i + 1))}</div>
+          <div class="row-sub">${fmtDate(p.tanggal)} · ${esc(p.catatan || 'Pembayaran ' + (i + 1))}${state.data.Pocket.length ? ' · dari ' + esc(pocketName(p.kantong)) : ''}</div>
         </div>
         <button type="button" class="btn small danger" data-action="delete-payment" data-id="${esc(p.id)}" data-item="${esc(it.id)}">Hapus</button>
       </div>`).join('');
@@ -683,7 +921,10 @@ function itemForm(it, presetCat) {
             <label class="field"><span>Jumlah bayar (Rp)</span><input type="text" inputmode="numeric" data-money name="jumlah" placeholder="0" required></label>
             <label class="field"><span>Tanggal</span><input type="date" name="tanggal" value="${todayStr()}" required></label>
           </div>
-          <label class="field"><span>Keterangan</span><input type="text" name="catatan" placeholder="mis. DP, cicilan 2, pelunasan" maxlength="60"></label>
+          <div class="field-row">
+            <label class="field"><span>Keterangan</span><input type="text" name="catatan" placeholder="mis. DP, pelunasan" maxlength="60"></label>
+            <label class="field"><span>Dibayar dari pocket</span><select name="kantong">${pocketOptions(rememberedPocket('wp_last_pay_pocket'))}</select></label>
+          </div>
           <div class="actions">
             ${full.sisa > 0 ? `<button type="button" class="btn small" data-action="fill-lunas" data-amount="${full.sisa}">Isi sisa (lunas)</button>` : '<span></span>'}
             <button type="submit" class="btn primary">+ Catat pembayaran</button>
@@ -720,10 +961,46 @@ const formData = (form) => Object.fromEntries(new FormData(form).entries());
 const formHandlers = {
   async saving(form) {
     const f = formData(form);
-    const row = { id: form.dataset.id || '', tanggal: f.tanggal, oleh: f.oleh, jenis: f.jenis, jumlah: num(f.jumlah), catatan: f.catatan.trim() };
+    const pindah = f.jenis === 'pindah';
+    const gramRelevant = isGram(f.kantong) || (pindah && isGram(f.ke));
+    const row = {
+      id: form.dataset.id || '',
+      tanggal: f.tanggal,
+      oleh: pindah ? '' : f.oleh,
+      jenis: f.jenis,
+      jumlah: num(f.jumlah),
+      catatan: f.catatan.trim(),
+      kantong: f.kantong || '',
+      ke: pindah ? f.ke || '' : '',
+      gram: gramRelevant && dec(f.gram) > 0 ? dec(f.gram) : '',
+    };
     if (row.jumlah <= 0) return toast('Jumlah harus lebih dari 0.', true);
-    store.set('wp_last_who', row.oleh);
-    if (await sync({ action: 'save', sheet: 'Tabungan', row }, 'Tabungan tersimpan')) closeModal();
+    if (state.data.Pocket.length && !row.kantong) return toast('Pilih pocket dulu.', true);
+    if (pindah && (!row.ke || row.ke === row.kantong)) return toast('Pocket asal dan tujuan harus berbeda.', true);
+    const src = row.kantong && calc().pockets.find((p) => p.id === row.kantong);
+    if (f.jenis !== 'setor' && src) {
+      const old = state.data.Tabungan.find((t) => t.id === row.id);
+      const available = src.modal + (old && old.kantong === row.kantong && old.jenis !== 'setor' ? num(old.jumlah) : 0);
+      if (row.jumlah > available && !confirm(`Saldo ${src.nama} hanya ${rp(available)}. Tetap simpan?`)) return;
+    }
+    if (!pindah) store.set('wp_last_who', row.oleh);
+    if (f.jenis === 'setor') store.set('wp_last_pocket', row.kantong);
+    if (await sync({ action: 'save', sheet: 'Tabungan', row }, 'Transaksi tersimpan')) closeModal();
+  },
+  async pocket(form) {
+    const f = formData(form);
+    const old = state.data.Pocket.find((p) => p.id === form.dataset.id) || {};
+    const nilai = f.nilai_sekarang ? num(f.nilai_sekarang) : '';
+    const row = Object.assign({}, old, {
+      id: form.dataset.id || '',
+      nama: f.nama.trim(),
+      satuan: f.satuan === 'gram' ? 'gram' : '',
+      nilai_sekarang: nilai,
+      tgl_nilai: nilai === '' ? '' : (f.tgl_nilai || todayStr()),
+      catatan: f.catatan.trim(),
+    });
+    if (!row.nama) return toast('Nama pocket wajib diisi.', true);
+    if (await sync({ action: 'save', sheet: 'Pocket', row }, 'Pocket tersimpan')) closeModal();
   },
   async item(form) {
     const f = formData(form);
@@ -744,8 +1021,9 @@ const formHandlers = {
   },
   async payment(form) {
     const f = formData(form);
-    const row = { id: '', item_id: form.dataset.item, tanggal: f.tanggal, jumlah: num(f.jumlah), catatan: f.catatan.trim() };
+    const row = { id: '', item_id: form.dataset.item, tanggal: f.tanggal, jumlah: num(f.jumlah), catatan: f.catatan.trim(), kantong: f.kantong || '' };
     if (row.jumlah <= 0) return toast('Jumlah harus lebih dari 0.', true);
+    if (row.kantong) store.set('wp_last_pay_pocket', row.kantong);
     if (await sync({ action: 'save', sheet: 'Pembayaran', row }, 'Pembayaran dicatat')) reopenItem(row.item_id);
   },
   async settings(form) {
@@ -773,8 +1051,14 @@ const actions = {
   'new-saving'() { savingForm(null); },
   'edit-saving'(el) { savingForm(state.data.Tabungan.find((t) => t.id === el.dataset.id)); },
   async 'delete-saving'(el) {
-    if (!confirm('Hapus catatan tabungan ini?')) return;
+    if (!confirm('Hapus catatan ini?')) return;
     if (await sync({ action: 'delete', sheet: 'Tabungan', id: el.dataset.id }, 'Catatan dihapus')) closeModal();
+  },
+  'new-pocket'() { pocketForm(null); },
+  'edit-pocket'(el) { pocketForm(state.data.Pocket.find((p) => p.id === el.dataset.id)); },
+  async 'delete-pocket'(el) {
+    if (!confirm('Hapus pocket ini?')) return;
+    if (await sync({ action: 'delete', sheet: 'Pocket', id: el.dataset.id }, 'Pocket dihapus')) closeModal();
   },
   'new-item'(el) { itemForm(null, el.dataset.cat); },
   'edit-item'(el) { itemForm(state.data.Anggaran.find((a) => a.id === el.dataset.id)); },
@@ -827,6 +1111,13 @@ document.addEventListener('input', (e) => {
   if (!el.matches('[data-money]')) return;
   const digits = el.value.replace(/[^\d]/g, '');
   el.value = digits ? Number(digits).toLocaleString('id-ID') : '';
+});
+
+document.addEventListener('change', (e) => {
+  const el = e.target;
+  const savingFormEl = el.closest && el.closest('form[data-form="saving"]');
+  if (savingFormEl) updateSavingForm(savingFormEl);
+  if (el.matches('[data-change="pocket-filter"]')) { state.pocketFilter = el.value; render(); }
 });
 
 // Ingat kategori yang dibuka/ditutup

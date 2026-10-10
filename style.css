@@ -492,3 +492,8 @@ textarea { resize: vertical; min-height: 64px; }
 
 .settings-list .row { padding: 14px 0; }
 .link { color: var(--accent); }
+
+/* ---------- Pocket ---------- */
+.check { display: flex; align-items: center; gap: 10px; font-size: 14px; color: var(--ink-2); cursor: pointer; }
+.check input { width: 18px; height: 18px; accent-color: var(--accent); }
+.pocket-filter { margin-bottom: 6px; max-width: 260px; }
